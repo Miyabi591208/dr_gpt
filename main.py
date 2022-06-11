@@ -39,10 +39,7 @@ def callback():
 def handle_message(event):
     if re.search('水の呼吸',event.message.text) or re.search('みずのこきゅう',event.message.text):
         if re.search('壱',event.message.text) or re.search('いち',event.message.text):
-	        line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage(text="水面斬り")
-            ) 
+            line_bot_api.reply_message(event.reply_token,TextSendMessage(text="水面斬り"))
         elif re.search('弐', event.message.text) or re.search('に', event.message.text):
             line_bot_api.reply_message(
                 event.reply_token,
