@@ -95,6 +95,29 @@ def handle_message(event):
                 event.reply_token,
                 TextSendMessage(text="そんなのないよ")
             )
+    elif re.search('火の呼吸', event.message.text) or re.search('ひのこきゅう', event.message.text):
+        if re.search('壱',event.message.text) or re.search('いち',event.message.text):
+            line_bot_api.reply_message(event.reply_token,TextSendMessage(text="火の神神楽"))
+
+    elif re.search('煉獄さん', event.message.text) or re.search('れんごくさん', event.message.text):
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text="心を燃やせ！！！"))
+
+    elif re.search('禰󠄀豆子', event.message.text) or re.search('ねずこ', event.message.text):
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text="ねずこーーーー！！！"))
+
+    elif re.search('ねずみ', event.message.text) or re.search('筋肉', event.message.text):
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text="ムキ！！！"))
+
+    elif re.search('白鳥', event.message.text) or re.search('ハクチョウ', event.message.text):
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text="クワっ！！！"))
     else:
         line_bot_api.reply_message(
             event.reply_token,
