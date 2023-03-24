@@ -17,14 +17,14 @@ import os
 import re
 import random
 import openai
-openai.organization = "org-GyrUX0PxZ501ZjT3yusFFWzl"
-openai.api_key      = "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"
+openai.organization = "organization key を入力"
+openai.api_key      = "api key を入力"
  
 app = Flask(__name__)
  
 #LINEのMessaging APIに記載してあるLINE Access Tokenと　CHANNEL SECRETを設定します。
-LINE_CHANNEL_ACCESS_TOKEN = "QlPr9rKe5gr+MEHQzYFPmkMRHGj0xP7FVGjABG1a8UmZ5BvdBmLOgy0gzPWO7+bnW/kMJXg9IARmHfYfJ9dWr/fdTvnUXbKm7JLpI61vhaInYn+YGaf/2mhtxeRPJn7W/b/CV/WEypK6XJGc5Ee+xwdB04t89/1O/w1cDnyilFU="
-LINE_CHANNEL_SECRET = "ea593146dba0678597eec544164d5ab9"
+LINE_CHANNEL_ACCESS_TOKEN = "ACCESS_TOKENを入力"
+LINE_CHANNEL_SECRET = "CHANNEL_SECRETを入力"
  
 line_bot_api = LineBotApi(LINE_CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(LINE_CHANNEL_SECRET)
@@ -48,13 +48,12 @@ def callback():
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
     message = event.message.text
-    comment = ["えっ？なんて言ったの？", "しゃラップ", f"あなたは{event.message.text}と言ったのか？"]
     # 応答設定
     completion = openai.ChatCompletion.create(
-                 model    = "gpt-3.5-turbo",     # モデルを選択
+                 model    = "gpt-3.5-turbo",     # モデルを選択(GPT4もあるが有料)
                  messages = [{
                             "role":"user",
-                            "content":message,   # メッセージ 
+                            "content":message,   # メッセージを設定
                             }],
     
                  max_tokens  = 1024,             # 生成する文章の最大単語数
