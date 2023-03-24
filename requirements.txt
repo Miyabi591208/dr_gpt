@@ -15,4 +15,4 @@ tensorboard==2.3.0
 tensorflow-cpu==2.3.0
 urllib3==1.26.5
 line-bot-sdk==1.16.0
-transformers==4.4.2
+openai==0.27.2
