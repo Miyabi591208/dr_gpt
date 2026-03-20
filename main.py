@@ -35,6 +35,7 @@ from line_ui import (
 )
 from services.openai_service import OpenAIService
 from services.places_service import PlacesService
+from services.pubmed_service import PubMedService
 from services.qiita_service import QiitaService
 from state_store import StateStore
 
@@ -50,6 +51,11 @@ state_store = StateStore(Config.SQLITE_PATH)
 openai_service = OpenAIService(Config.OPENAI_API_KEY, Config.OPENAI_MODEL)
 places_service = PlacesService(Config.GOOGLE_MAPS_API_KEY)
 qiita_service = QiitaService(Config.QIITA_ACCESS_TOKEN)
+pubmed_service = PubMedService(
+    api_key=Config.PUBMED_API_KEY or None,
+    tool_name=Config.PUBMED_TOOL_NAME,
+    email=Config.PUBMED_EMAIL or None,
+)
 
 CHAT_HISTORY_LIMIT_INPUT = 10
 CHAT_HISTORY_LIMIT_STORE = 20
@@ -116,6 +122,8 @@ def build_qiita_tags(domain: str) -> list[str]:
         tags.append("統計")
     elif normalized == "バイオインフォマティクス":
         tags.append("Bioinformatics")
+    elif normalized == "文献検索":
+        tags.append("PubMed")
 
     seen = set()
     unique_tags = []
@@ -125,6 +133,41 @@ def build_qiita_tags(domain: str) -> list[str]:
             seen.add(tag)
 
     return unique_tags[:5]
+
+
+def format_pubmed_results(query: str, articles: list[dict]) -> str:
+    if not articles:
+        return (
+            f"PubMedで文献が見つかりませんでした。\n"
+            f"検索語: {query}\n\n"
+            "別のキーワード、英語表現、遺伝子名、疾患名、手法名などで再検索してください。"
+        )
+
+    lines = [
+        f"PubMed検索結果",
+        f"検索語: {query}",
+        "",
+    ]
+
+    for i, article in enumerate(articles, start=1):
+        lines.append(f"{i}. {article.get('title', 'タイトル不明')}")
+        if article.get("authors"):
+            lines.append(f"著者: {article['authors']}")
+        meta_parts = []
+        if article.get("journal"):
+            meta_parts.append(article["journal"])
+        if article.get("pubdate"):
+            meta_parts.append(article["pubdate"])
+        if meta_parts:
+            lines.append("掲載情報: " + " / ".join(meta_parts))
+        lines.append(f"PMID: {article.get('pmid', '')}")
+        if article.get("doi"):
+            lines.append(f"DOI: {article['doi']}")
+        if article.get("url"):
+            lines.append(article["url"])
+        lines.append("")
+
+    return "\n".join(lines).strip()
 
 
 def start_shop_flow(user_id: str, event) -> None:
@@ -325,7 +368,6 @@ def handle_follow(event):
 
 @handler.add(PostbackEvent)
 def handle_postback(event):
-    user_id = get_user_id(event)
     data = getattr(event.postback, "data", "") or ""
 
     mapping = {
@@ -492,11 +534,57 @@ def handle_text_message(event):
         if step == "waiting_domain":
             data["last_domain"] = text
             state_store.set(user_id, "calc", "waiting_question", data)
-            reply(event, TextMessage(text=f"{text}モードです。質問文を送ってください。"))
+
+            if text == "文献検索":
+                reply(
+                    event,
+                    TextMessage(
+                        text=(
+                            "PubMed文献検索モードです。\n"
+                            "検索したいキーワードを送ってください。\n"
+                            "例: single cell RNA-seq kidney fibrosis"
+                        )
+                    ),
+                )
+            else:
+                reply(event, TextMessage(text=f"{text}モードです。質問文を送ってください。"))
             return
 
         if step == "waiting_question":
             domain = data.get("last_domain", "数学")
+
+            if domain == "文献検索":
+                try:
+                    articles = pubmed_service.search_articles(
+                        query=text,
+                        retmax=Config.PUBMED_MAX_RESULTS,
+                        sort="relevance",
+                    )
+                except Exception as e:
+                    app.logger.exception("PubMed search failed: %s", e)
+                    reply(
+                        event,
+                        TextMessage(
+                            text=(
+                                "PubMed検索でエラーが発生しました。\n"
+                                "検索語を短くするか、英語キーワードで再度お試しください。"
+                            )
+                        ),
+                    )
+                    return
+
+                result_text = format_pubmed_results(text, articles)
+                data["last_question"] = text
+                data["last_answer"] = result_text
+                state_store.set(user_id, "calc", "waiting_question", data)
+
+                messages = text_chunks_as_messages(result_text)
+                if len(messages) <= 4:
+                    messages.append(article_action_message())
+
+                reply(event, messages[:5])
+                return
+
             answer = openai_service.solve_calculation(domain=domain, user_text=text)
             data["last_question"] = text
             data["last_answer"] = answer
