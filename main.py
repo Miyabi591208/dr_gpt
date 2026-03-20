@@ -441,7 +441,12 @@ def handle_text_message(event):
                 app.logger.exception("Shop search failed: %s", e)
                 reply(
                     event,
-                    TextMessage(text="店舗検索でエラーが発生しました。Google Maps API設定をご確認ください。"),
+                    TextMessage(
+                        text=(
+                            "周辺店舗の検索でエラーが発生しました。\n"
+                            "Google Places API とフォールバック検索の両方で取得できませんでした。"
+                        )
+                    ),
                 )
                 return
 
@@ -451,15 +456,30 @@ def handle_text_message(event):
                 return
 
             state_store.clear(user_id)
-            messages = [
-                shop_summary_text(places),
-                shop_results_flex_message(
-                    places=places,
-                    origin_lat=location["lat"],
-                    origin_lng=location["lng"],
-                    build_directions_url=places_service.build_directions_url,
-                ),
-            ]
+            messages = []
+
+            if places[0].get("source") == "osm_fallback":
+                messages.append(
+                    TextMessage(
+                        text=(
+                            "Google Maps API から候補を取得できなかったため、"
+                            "位置情報ベースの代替検索で周辺候補を表示しています。"
+                            "評価や価格帯は十分に取得できない場合があります。"
+                        )
+                    )
+                )
+
+            messages.extend(
+                [
+                    shop_summary_text(places),
+                    shop_results_flex_message(
+                        places=places,
+                        origin_lat=location["lat"],
+                        origin_lng=location["lng"],
+                        build_directions_url=places_service.build_directions_url,
+                    ),
+                ]
+            )
 
             top = places[0]
             if top.get("lat") is not None and top.get("lng") is not None:
