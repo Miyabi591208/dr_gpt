@@ -1,3 +1,7 @@
+from __future__ import annotations
+
+from typing import Sequence
+
 from openai import OpenAI
 
 
@@ -6,52 +10,83 @@ class OpenAIService:
         self.client = OpenAI(api_key=api_key)
         self.model = model
 
-    def _run(self, instructions: str, user_input: str, max_output_tokens: int = 1800) -> str:
-        response = self.client.responses.create(
+    def _create_response(self, messages: list[dict[str, str]], temperature: float = 0.7) -> str:
+        response = self.client.chat.completions.create(
             model=self.model,
-            instructions=instructions,
-            input=user_input,
-            max_output_tokens=max_output_tokens,
+            messages=messages,
+            temperature=temperature,
         )
-        text = (response.output_text or "").strip()
-        return text or "申し訳ありません。応答を生成できませんでした。"
+        return (response.choices[0].message.content or "").strip()
 
-    def chat(self, user_text: str) -> str:
-        instructions = (
-            "あなたはLINE上で応答する日本語アシスタントです。"
-            "丁寧で簡潔に答えてください。"
-            "必要な場合は箇条書きや見出しで整理してください。"
-        )
-        return self._run(instructions, user_text)
+    def chat(
+        self,
+        user_text: str,
+        history: Sequence[dict[str, str]] | None = None,
+        system_prompt: str | None = None,
+    ) -> str:
+        messages: list[dict[str, str]] = [
+            {
+                "role": "system",
+                "content": system_prompt
+                or (
+                    "あなたは親切で分かりやすい会話アシスタントです。"
+                    "過去の会話文脈が与えられている場合は、それを踏まえて自然につながる返答をしてください。"
+                    "ただし、事実が不明な点は断定せず、必要に応じて不確実性を明示してください。"
+                ),
+            }
+        ]
+
+        if history:
+            for item in history:
+                role = item.get("role", "").strip()
+                content = item.get("content", "").strip()
+                if role in {"user", "assistant", "system"} and content:
+                    messages.append({"role": role, "content": content})
+
+        messages.append({"role": "user", "content": user_text})
+
+        return self._create_response(messages, temperature=0.7)
 
     def solve_calculation(self, domain: str, user_text: str) -> str:
-        instructions = (
-            "あなたは教育的な計算アシスタントです。"
-            "日本語で答えてください。"
-            "途中式・考え方・前提をできるだけ省略せず、順番に説明してください。"
-            "数式がある場合は読める形で整形してください。"
-            "最後に『要点』を短くまとめてください。"
-            f"専門モード: {domain}"
+        system_prompt = (
+            "あなたは数理計算を支援する専門アシスタントです。"
+            "解答は正確性を重視し、途中式や考え方を分かりやすく整理してください。"
+            "不明な前提は勝手に補わず、必要に応じて仮定を明示してください。"
         )
-        return self._run(instructions, user_text, max_output_tokens=2200)
+
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {
+                "role": "user",
+                "content": (
+                    f"分野: {domain}\n"
+                    f"質問: {user_text}\n\n"
+                    "上記に対して、できるだけ丁寧かつ分かりやすく回答してください。"
+                ),
+            },
+        ]
+
+        return self._create_response(messages, temperature=0.2)
 
     def draft_article(self, domain: str, question: str, answer: str) -> str:
-        instructions = (
+        system_prompt = (
             "あなたは技術記事の編集者です。"
-            "日本語Markdownで、Qiitaや技術ブログに貼りやすい記事を作成してください。"
-            "構成は以下の順にしてください。"
-            "1. タイトル"
-            "2. 背景"
-            "3. 問題設定"
-            "4. 解説"
-            "5. 必要に応じて数式またはコード"
-            "6. まとめ"
-            "コードブロックはMarkdownで整えてください。"
+            "与えられた質問と回答をもとに、Qiita等へ投稿しやすいMarkdown記事を作成してください。"
+            "冗長すぎず、見出し構成を明確にし、読み手が理解しやすい形に整えてください。"
         )
-        prompt = (
-            f"分野: {domain}\n\n"
-            f"元の質問:\n{question}\n\n"
-            f"回答内容:\n{answer}\n\n"
-            "上記をもとに、読み手が理解しやすい技術記事をMarkdownで作成してください。"
-        )
-        return self._run(instructions, prompt, max_output_tokens=2600)
+
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {
+                "role": "user",
+                "content": (
+                    f"分野: {domain}\n"
+                    f"元の質問:\n{question}\n\n"
+                    f"元の回答:\n{answer}\n\n"
+                    "上記をもとに、Markdown形式の読みやすい記事を作成してください。"
+                    "先頭にタイトルとなる見出し（# タイトル）を入れてください。"
+                ),
+            },
+        ]
+
+        return self._create_response(messages, temperature=0.5)
