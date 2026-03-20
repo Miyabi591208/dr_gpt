@@ -185,13 +185,13 @@ def build_qiita_tags(domain: str) -> list[str]:
 def format_pubmed_results(query: str, articles: list[dict]) -> str:
     if not articles:
         return (
-            f"PubMedで文献が見つかりませんでした。\n"
+            f"PubMedで文献が見つからなかったのじゃ。\n"
             f"検索語: {query}\n\n"
-            "別のキーワード、英語表現、遺伝子名、疾患名、手法名などで再検索してください。"
+            "別のキーワードや英語表現、遺伝子名、疾患名、手法名などで試してみるのじゃよ。"
         )
 
     lines = [
-        "PubMed検索結果",
+        "PubMed検索結果じゃ 📚",
         f"検索語: {query}",
         "",
     ]
@@ -233,9 +233,10 @@ def start_chat_flow(user_id: str, event) -> None:
         event,
         TextMessage(
             text=(
-                "雑談モードです。自由に話しかけてください。\n"
-                "過去の会話文脈もある程度踏まえて返答します。\n"
-                "メニューに戻る場合は「メニュー」と送ってください。"
+                "雑談モードじゃよ 💬✨\n"
+                "気軽に何でも話しかけてほしいのじゃ。\n"
+                "前の会話もある程度ふまえて返すようにしとるぞい。\n\n"
+                "メニューへ戻るときは「メニュー」と送るのじゃ！"
             )
         ),
     )
@@ -248,7 +249,7 @@ def start_article_flow(user_id: str, event) -> None:
     if not data.get("last_question") or not data.get("last_answer") or not data.get("last_domain"):
         reply(
             event,
-            TextMessage(text="記事化する元データがありません。先に数理計算モードで質問してください。"),
+            TextMessage(text="記事化する元データがまだないのじゃ。先に数理計算モードで質問してほしいのう。"),
         )
         return
 
@@ -277,9 +278,9 @@ def start_article_flow(user_id: str, event) -> None:
         messages.append(
             TextMessage(
                 text=(
-                    "記事を作成しました。\n"
-                    "ただし Qiita 投稿用トークンが未設定のため、自動投稿はできません。\n"
-                    "必要であれば QIITA_ACCESS_TOKEN を設定してください。"
+                    "記事はできあがったのじゃ！📝\n"
+                    "ただし Qiita 投稿用トークンが未設定なので、自動投稿はまだできんのじゃ。\n"
+                    "必要であれば QIITA_ACCESS_TOKEN を設定してほしいのう。"
                 )
             )
         )
@@ -299,7 +300,7 @@ def post_article_to_qiita(user_id: str, event) -> None:
         reply(
             event,
             [
-                TextMessage(text="投稿対象の記事データが見つかりません。先に「記事化」を実行してください。"),
+                TextMessage(text="投稿対象の記事データが見つからなかったのじゃ。先に「記事化」を実行してほしいのう。"),
                 main_menu_message(),
             ],
         )
@@ -308,7 +309,7 @@ def post_article_to_qiita(user_id: str, event) -> None:
     if not qiita_service.is_enabled():
         reply(
             event,
-            TextMessage(text="QIITA_ACCESS_TOKEN が未設定のため、Qiitaへ投稿できません。"),
+            TextMessage(text="QIITA_ACCESS_TOKEN が未設定のため、Qiitaへ投稿できないのじゃ。"),
         )
         return
 
@@ -318,7 +319,7 @@ def post_article_to_qiita(user_id: str, event) -> None:
             [
                 TextMessage(
                     text=(
-                        "この記事はすでにQiitaへ投稿済みです。\n"
+                        "この記事はすでにQiitaへ投稿済みなのじゃよ。\n"
                         f"{data['last_qiita_post_url']}"
                     )
                 ),
@@ -342,8 +343,8 @@ def post_article_to_qiita(user_id: str, event) -> None:
             event,
             TextMessage(
                 text=(
-                    "Qiita投稿でエラーが発生しました。\n"
-                    "トークン権限、タグ、本文サイズ、Qiita側ステータスをご確認ください。"
+                    "Qiita投稿でエラーが出てしまったのじゃ…。\n"
+                    "トークン権限、タグ、本文サイズ、Qiita側の状態を確認してみてほしいのう。"
                 )
             ),
         )
@@ -358,7 +359,7 @@ def post_article_to_qiita(user_id: str, event) -> None:
     messages = [
         TextMessage(
             text=(
-                "Qiitaへ投稿しました。\n"
+                "Qiitaへ投稿できたのじゃ！🎉\n"
                 f"タイトル: {article_title}"
             )
         )
@@ -418,7 +419,7 @@ def handle_shop_search_and_reply(event, user_id: str, data: dict) -> None:
         else:
             reply(
                 event,
-                TextMessage(text="位置情報またはエリア名が必要です。"),
+                TextMessage(text="位置情報またはエリア名が必要なのじゃ。"),
             )
             return
 
@@ -430,8 +431,8 @@ def handle_shop_search_and_reply(event, user_id: str, data: dict) -> None:
             [
                 TextMessage(
                     text=(
-                        "お店検索で候補を取得できませんでした。\n"
-                        "位置情報が使えない場合は、駅名やエリア名で再度お試しください。"
+                        "お店検索で候補を取得できなかったのじゃ…。\n"
+                        "位置情報が使えない場合は、駅名やエリア名で再度試してみてほしいのう。"
                     )
                 ),
                 ask_shop_search_method_message(),
@@ -451,9 +452,8 @@ def handle_shop_search_and_reply(event, user_id: str, data: dict) -> None:
         messages.append(
             TextMessage(
                 text=(
-                    "Google Maps API から候補を取得できなかったため、"
-                    "代替検索で周辺候補を表示しています。"
-                    "評価や価格帯は十分に取得できない場合があります。"
+                    "Google Maps API から候補を取得できなかったため、代替検索で周辺候補を表示しておるのじゃ 🗺️\n"
+                    "評価や価格帯は十分に取得できない場合もあるぞい。"
                 )
             )
         )
@@ -501,7 +501,13 @@ def callback():
 
 @handler.add(FollowEvent)
 def handle_follow(event):
-    reply(event, [TextMessage(text="友だち追加ありがとうございます。"), main_menu_message()])
+    reply(
+        event,
+        [
+            TextMessage(text="友だち追加ありがとうなのじゃ！🎉"),
+            main_menu_message(),
+        ],
+    )
 
 
 @handler.add(PostbackEvent)
@@ -546,7 +552,7 @@ def handle_location_message(event):
 
     reply(
         event,
-        TextMessage(text="位置情報を受け取りました。店探しを始める場合は「おすすめの店」を選んでください。"),
+        TextMessage(text="位置情報を受け取ったのじゃ。お店探しを始めるなら「おすすめの店」を選ぶのじゃよ。"),
     )
 
 
@@ -566,12 +572,12 @@ def handle_text_message(event):
 
     if text == "キャンセル":
         state_store.clear(user_id)
-        reply(event, [TextMessage(text="キャンセルしました。"), main_menu_message()])
+        reply(event, [TextMessage(text="キャンセルしたのじゃ。"), main_menu_message()])
         return
 
     if text in {"履歴削除", "会話履歴削除", "雑談履歴削除"}:
         state_store.clear_chat_history(user_id)
-        reply(event, TextMessage(text="雑談の会話履歴を削除しました。"))
+        reply(event, TextMessage(text="雑談の会話履歴を削除したのじゃ。"))
         return
 
     if text == "おすすめの店":
@@ -633,14 +639,14 @@ def handle_text_message(event):
                     event,
                     TextMessage(
                         text=(
-                            "PubMed文献検索モードです。\n"
-                            "検索したいキーワードを送ってください。\n"
+                            "PubMed文献検索モードじゃ 📚✨\n"
+                            "検索したいキーワードを送ってほしいのじゃ。\n"
                             "例: single cell RNA-seq kidney fibrosis"
                         )
                     ),
                 )
             else:
-                reply(event, TextMessage(text=f"{text}モードです。質問文を送ってください。"))
+                reply(event, TextMessage(text=f"{text}モードじゃよ。質問文を送るのじゃ！"))
             return
 
         if step == "waiting_question":
@@ -659,8 +665,8 @@ def handle_text_message(event):
                         event,
                         TextMessage(
                             text=(
-                                "PubMed検索でエラーが発生しました。\n"
-                                "検索語を短くするか、英語キーワードで再度お試しください。"
+                                "PubMed検索でエラーが出てしまったのじゃ…。\n"
+                                "検索語を短くするか、英語キーワードで再度試してみてほしいのう。"
                             )
                         ),
                     )
