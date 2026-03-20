@@ -10,7 +10,6 @@ from linebot.v3.messaging import (
     QuickReply,
     QuickReplyItem,
     TextMessage,
-    URIAction,
 )
 
 
@@ -88,6 +87,7 @@ def ask_calc_domain_message() -> TextMessage:
                 QuickReplyItem(action=MessageAction(label="数学", text="数学")),
                 QuickReplyItem(action=MessageAction(label="統計学", text="統計学")),
                 QuickReplyItem(action=MessageAction(label="バイオインフォマティクス", text="バイオインフォマティクス")),
+                QuickReplyItem(action=MessageAction(label="文献検索", text="文献検索")),
                 QuickReplyItem(action=MessageAction(label="キャンセル", text="キャンセル")),
             ]
         ),
