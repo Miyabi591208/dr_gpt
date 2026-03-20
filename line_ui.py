@@ -12,6 +12,11 @@ from linebot.v3.messaging import (
     TextMessage,
 )
 
+# LINEのテキストは最大5000文字だが、実際のカウントはUTF-16 code units基準。
+# 安全側に倒して少し余裕を持たせる。
+LINE_TEXT_HARD_LIMIT = 5000
+LINE_TEXT_SAFE_LIMIT = 4500
+
 
 def main_menu_message() -> TextMessage:
     return TextMessage(
@@ -237,21 +242,73 @@ def shop_summary_text(places: Sequence[dict]) -> TextMessage:
     return TextMessage(text="\n".join(lines))
 
 
-def text_chunks_as_messages(text: str, chunk_size: int = 1500) -> list[TextMessage]:
-    chunks = []
+def _utf16_len(text: str) -> int:
+    return len(text.encode("utf-16-le")) // 2
+
+
+def _slice_by_utf16_limit(text: str, limit: int) -> tuple[str, str]:
+    """
+    UTF-16 code units基準で安全に text を先頭部分 / 残り に切る。
+    """
+    if _utf16_len(text) <= limit:
+        return text, ""
+
     current = []
     current_len = 0
 
+    for ch in text:
+        ch_len = _utf16_len(ch)
+        if current_len + ch_len > limit:
+            break
+        current.append(ch)
+        current_len += ch_len
+
+    head = "".join(current)
+    tail = text[len(head):]
+    return head, tail
+
+
+def text_chunks_as_messages(text: str, chunk_size: int = LINE_TEXT_SAFE_LIMIT) -> list[TextMessage]:
+    """
+    LINE制限を意識して、UTF-16基準で安全に分割する。
+    まず改行単位でまとめ、長すぎる1行はさらに文字単位で分割する。
+    """
+    text = (text or "").strip()
+    if not text:
+        return [TextMessage(text="")]
+
+    chunks: list[str] = []
+    current = ""
+
     for line in text.splitlines(keepends=True):
-        if current_len + len(line) > chunk_size and current:
-            chunks.append("".join(current))
-            current = [line]
-            current_len = len(line)
+        if _utf16_len(line) > chunk_size:
+            # まず現在バッファを確定
+            if current:
+                chunks.append(current)
+                current = ""
+
+            remaining = line
+            while remaining:
+                head, remaining = _slice_by_utf16_limit(remaining, chunk_size)
+                chunks.append(head)
+            continue
+
+        candidate = current + line
+        if current and _utf16_len(candidate) > chunk_size:
+            chunks.append(current)
+            current = line
         else:
-            current.append(line)
-            current_len += len(line)
+            current = candidate
 
     if current:
-        chunks.append("".join(current))
+        chunks.append(current)
 
-    return [TextMessage(text=c[:5000]) for c in chunks[:5]]
+    safe_messages: list[TextMessage] = []
+    for chunk in chunks:
+        # 念のため最終安全化
+        remaining = chunk
+        while remaining:
+            head, remaining = _slice_by_utf16_limit(remaining, LINE_TEXT_HARD_LIMIT)
+            safe_messages.append(TextMessage(text=head))
+
+    return safe_messages
