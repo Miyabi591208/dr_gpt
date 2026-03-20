@@ -106,6 +106,24 @@ def article_action_message() -> TextMessage:
     )
 
 
+def article_post_confirm_message(title: str) -> TextMessage:
+    safe_title = (title or "無題").strip()[:80]
+    return TextMessage(
+        text=(
+            "記事を作成しました。\n"
+            f"タイトル案: {safe_title}\n\n"
+            "Qiitaへ投稿しますか？"
+        ),
+        quick_reply=QuickReply(
+            items=[
+                QuickReplyItem(action=MessageAction(label="Qiitaに投稿する", text="Qiitaに投稿する")),
+                QuickReplyItem(action=MessageAction(label="メニュー", text="メニュー")),
+                QuickReplyItem(action=MessageAction(label="キャンセル", text="キャンセル")),
+            ]
+        ),
+    )
+
+
 def top_location_message(place: dict) -> LocationMessage:
     return LocationMessage(
         title=place["name"][:100],
@@ -115,11 +133,21 @@ def top_location_message(place: dict) -> LocationMessage:
     )
 
 
-def shop_results_flex_message(places: Sequence[dict], origin_lat: float, origin_lng: float, build_directions_url) -> FlexMessage:
+def shop_results_flex_message(
+    places: Sequence[dict],
+    origin_lat: float,
+    origin_lng: float,
+    build_directions_url,
+) -> FlexMessage:
     bubbles = []
 
     for place in places[:5]:
-        directions_url = build_directions_url(origin_lat, origin_lng, place["lat"], place["lng"])
+        directions_url = build_directions_url(
+            origin_lat,
+            origin_lng,
+            place["lat"],
+            place["lng"],
+        )
         maps_url = place.get("google_maps_uri") or directions_url
 
         rating_text = "評価なし"
@@ -205,6 +233,7 @@ def shop_summary_text(places: Sequence[dict]) -> TextMessage:
             lines.append(f"{idx}. {p['name']}")
         else:
             lines.append(f"{idx}. {p['name']} / ★{rating}")
+
     return TextMessage(text="\n".join(lines))
 
 
