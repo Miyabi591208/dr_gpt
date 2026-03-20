@@ -1,5 +1,6 @@
 import logging
 import re
+import time
 
 from flask import Flask, abort, request
 from linebot.v3 import WebhookHandler
@@ -8,6 +9,7 @@ from linebot.v3.messaging import (
     ApiClient,
     Configuration,
     MessagingApi,
+    PushMessageRequest,
     ReplyMessageRequest,
     TextMessage,
 )
@@ -60,6 +62,9 @@ pubmed_service = PubMedService(
 CHAT_HISTORY_LIMIT_INPUT = 10
 CHAT_HISTORY_LIMIT_STORE = 20
 
+# LINEは1リクエスト最大5メッセージ
+LINE_MAX_MESSAGES_PER_REQUEST = 5
+
 
 def get_user_id(event) -> str:
     if hasattr(event, "source") and getattr(event.source, "user_id", None):
@@ -67,18 +72,67 @@ def get_user_id(event) -> str:
     return "anonymous"
 
 
-def reply(event, messages) -> None:
+def _normalize_messages(messages):
+    if messages is None:
+        return []
     if not isinstance(messages, list):
-        messages = [messages]
+        return [messages]
+    return messages
+
+
+def reply(event, messages) -> None:
+    messages = _normalize_messages(messages)
+    if not messages:
+        return
 
     with ApiClient(line_config) as api_client:
         api = MessagingApi(api_client)
         api.reply_message(
             ReplyMessageRequest(
                 reply_token=event.reply_token,
-                messages=messages[:5],
+                messages=messages[:LINE_MAX_MESSAGES_PER_REQUEST],
             )
         )
+
+
+def push(user_id: str, messages) -> None:
+    messages = _normalize_messages(messages)
+    if not messages or not user_id or user_id == "anonymous":
+        return
+
+    with ApiClient(line_config) as api_client:
+        api = MessagingApi(api_client)
+
+        for i in range(0, len(messages), LINE_MAX_MESSAGES_PER_REQUEST):
+            chunk = messages[i:i + LINE_MAX_MESSAGES_PER_REQUEST]
+            api.push_message(
+                PushMessageRequest(
+                    to=user_id,
+                    messages=chunk,
+                )
+            )
+            # 連続送信を少しだけ緩める
+            if i + LINE_MAX_MESSAGES_PER_REQUEST < len(messages):
+                time.sleep(0.15)
+
+
+def reply_then_push(event, user_id: str, messages, reply_count: int = 1) -> None:
+    """
+    最初の数件だけ reply、残りは push で送る。
+    これで reply token 制約と 5件制限の両方を回避しやすくする。
+    """
+    messages = _normalize_messages(messages)
+    if not messages:
+        return
+
+    first = messages[:reply_count]
+    rest = messages[reply_count:]
+
+    if first:
+        reply(event, first)
+
+    if rest:
+        push(user_id, rest)
 
 
 def normalize_mode_text(text: str) -> str:
@@ -144,7 +198,7 @@ def format_pubmed_results(query: str, articles: list[dict]) -> str:
         )
 
     lines = [
-        f"PubMed検索結果",
+        "PubMed検索結果",
         f"検索語: {query}",
         "",
     ]
@@ -222,7 +276,7 @@ def start_article_flow(user_id: str, event) -> None:
 
     state_store.set(user_id, "article", "waiting_qiita_confirm", data)
 
-    messages = text_chunks_as_messages(article_md, chunk_size=1400)
+    messages = text_chunks_as_messages(article_md, chunk_size=4500)
 
     if qiita_service.is_enabled():
         messages.append(article_post_confirm_message(article_title))
@@ -237,7 +291,7 @@ def start_article_flow(user_id: str, event) -> None:
             )
         )
 
-    reply(event, messages[:5])
+    reply_then_push(event, user_id, messages, reply_count=1)
 
 
 def post_article_to_qiita(user_id: str, event) -> None:
@@ -321,7 +375,7 @@ def post_article_to_qiita(user_id: str, event) -> None:
         messages.append(TextMessage(text=result["url"]))
 
     messages.append(main_menu_message())
-    reply(event, messages[:5])
+    reply(event, messages)
 
 
 def chat_with_history(user_id: str, user_text: str) -> str:
@@ -527,7 +581,7 @@ def handle_text_message(event):
             if top.get("lat") is not None and top.get("lng") is not None:
                 messages.append(top_location_message(top))
 
-            reply(event, messages[:5])
+            reply(event, messages)
             return
 
     if mode == "calc":
@@ -578,11 +632,11 @@ def handle_text_message(event):
                 data["last_answer"] = result_text
                 state_store.set(user_id, "calc", "waiting_question", data)
 
-                messages = text_chunks_as_messages(result_text)
+                messages = text_chunks_as_messages(result_text, chunk_size=4500)
                 if len(messages) <= 4:
                     messages.append(article_action_message())
 
-                reply(event, messages[:5])
+                reply_then_push(event, user_id, messages, reply_count=1)
                 return
 
             answer = openai_service.solve_calculation(domain=domain, user_text=text)
@@ -590,11 +644,11 @@ def handle_text_message(event):
             data["last_answer"] = answer
             state_store.set(user_id, "calc", "waiting_question", data)
 
-            messages = text_chunks_as_messages(answer)
+            messages = text_chunks_as_messages(answer, chunk_size=4500)
             if len(messages) <= 4:
                 messages.append(article_action_message())
 
-            reply(event, messages[:5])
+            reply_then_push(event, user_id, messages, reply_count=1)
             return
 
     if mode == "article" and step == "waiting_qiita_confirm":
@@ -606,11 +660,13 @@ def handle_text_message(event):
 
     if mode == "chat":
         answer = chat_with_history(user_id, text)
-        reply(event, text_chunks_as_messages(answer))
+        messages = text_chunks_as_messages(answer, chunk_size=4500)
+        reply_then_push(event, user_id, messages, reply_count=1)
         return
 
     answer = openai_service.chat(text)
-    reply(event, text_chunks_as_messages(answer))
+    messages = text_chunks_as_messages(answer, chunk_size=4500)
+    reply_then_push(event, user_id, messages, reply_count=1)
 
 
 if __name__ == "__main__":
