@@ -25,10 +25,11 @@ from config import Config
 from line_ui import (
     article_action_message,
     article_post_confirm_message,
+    ask_area_keyword_message,
     ask_budget_message,
     ask_calc_domain_message,
-    ask_location_message,
     ask_shop_genre_message,
+    ask_shop_search_method_message,
     main_menu_message,
     shop_results_flex_message,
     shop_summary_text,
@@ -61,8 +62,6 @@ pubmed_service = PubMedService(
 
 CHAT_HISTORY_LIMIT_INPUT = 10
 CHAT_HISTORY_LIMIT_STORE = 20
-
-# LINEは1リクエスト最大5メッセージ
 LINE_MAX_MESSAGES_PER_REQUEST = 5
 
 
@@ -111,16 +110,11 @@ def push(user_id: str, messages) -> None:
                     messages=chunk,
                 )
             )
-            # 連続送信を少しだけ緩める
             if i + LINE_MAX_MESSAGES_PER_REQUEST < len(messages):
                 time.sleep(0.15)
 
 
 def reply_then_push(event, user_id: str, messages, reply_count: int = 1) -> None:
-    """
-    最初の数件だけ reply、残りは push で送る。
-    これで reply token 制約と 5件制限の両方を回避しやすくする。
-    """
     messages = _normalize_messages(messages)
     if not messages:
         return
@@ -130,7 +124,6 @@ def reply_then_push(event, user_id: str, messages, reply_count: int = 1) -> None
 
     if first:
         reply(event, first)
-
     if rest:
         push(user_id, rest)
 
@@ -225,8 +218,8 @@ def format_pubmed_results(query: str, articles: list[dict]) -> str:
 
 
 def start_shop_flow(user_id: str, event) -> None:
-    state_store.set(user_id, "shop", "waiting_location", {})
-    reply(event, ask_location_message())
+    state_store.set(user_id, "shop", "waiting_search_method", {})
+    reply(event, ask_shop_search_method_message())
 
 
 def start_calc_flow(user_id: str, event) -> None:
@@ -393,6 +386,97 @@ def chat_with_history(user_id: str, user_text: str) -> str:
     return answer
 
 
+def handle_shop_search_and_reply(event, user_id: str, data: dict) -> None:
+    genre = data.get("genre", "和食")
+    budget = data.get("budget", "こだわらない")
+
+    try:
+        if data.get("location"):
+            location = data["location"]
+            places = places_service.search_nearby_shops(
+                latitude=location["lat"],
+                longitude=location["lng"],
+                genre=genre,
+                budget=budget,
+                radius_meters=Config.SHOP_RADIUS_METERS,
+                max_results=5,
+            )
+            origin_lat = location["lat"]
+            origin_lng = location["lng"]
+            area_label = location.get("address") or location.get("title") or None
+        elif data.get("area_query"):
+            places, center = places_service.search_nearby_shops_from_area(
+                area_query=data["area_query"],
+                genre=genre,
+                budget=budget,
+                radius_meters=Config.SHOP_RADIUS_METERS,
+                max_results=5,
+            )
+            origin_lat = center["lat"]
+            origin_lng = center["lng"]
+            area_label = data["area_query"]
+        else:
+            reply(
+                event,
+                TextMessage(text="位置情報またはエリア名が必要です。"),
+            )
+            return
+
+    except Exception as e:
+        app.logger.exception("Shop search failed: %s", e)
+        state_store.clear(user_id)
+        reply(
+            event,
+            [
+                TextMessage(
+                    text=(
+                        "お店検索で候補を取得できませんでした。\n"
+                        "位置情報が使えない場合は、駅名やエリア名で再度お試しください。"
+                    )
+                ),
+                ask_shop_search_method_message(),
+            ],
+        )
+        return
+
+    if not places:
+        state_store.clear(user_id)
+        reply(event, [shop_summary_text([]), main_menu_message()])
+        return
+
+    state_store.clear(user_id)
+
+    messages = []
+    if places[0].get("source") == "osm_fallback":
+        messages.append(
+            TextMessage(
+                text=(
+                    "Google Maps API から候補を取得できなかったため、"
+                    "代替検索で周辺候補を表示しています。"
+                    "評価や価格帯は十分に取得できない場合があります。"
+                )
+            )
+        )
+
+    messages.extend(
+        [
+            shop_summary_text(places, area_label=area_label),
+            shop_results_flex_message(
+                places=places,
+                origin_lat=origin_lat,
+                origin_lng=origin_lng,
+                build_directions_url=places_service.build_directions_url,
+            ),
+        ]
+    )
+
+    top = places[0]
+    if top.get("lat") is not None and top.get("lng") is not None:
+        messages.append(top_location_message(top))
+
+    reply(event, messages)
+
+
 @app.route("/", methods=["GET"])
 def healthcheck():
     return "OK", 200
@@ -447,7 +531,7 @@ def handle_location_message(event):
     user_id = get_user_id(event)
     state = state_store.get(user_id)
 
-    if state.get("mode") == "shop" and state.get("step") == "waiting_location":
+    if state.get("mode") == "shop" and state.get("step") in {"waiting_search_method", "waiting_location"}:
         data = state.get("data", {})
         data["location"] = {
             "lat": event.message.latitude,
@@ -455,6 +539,7 @@ def handle_location_message(event):
             "address": getattr(event.message, "address", ""),
             "title": getattr(event.message, "title", ""),
         }
+        data.pop("area_query", None)
         state_store.set(user_id, "shop", "waiting_genre", data)
         reply(event, ask_shop_genre_message())
         return
@@ -510,6 +595,22 @@ def handle_text_message(event):
         return
 
     if mode == "shop":
+        if step == "waiting_search_method":
+            if text == "エリア名で探す":
+                state_store.set(user_id, "shop", "waiting_area_query", data)
+                reply(event, ask_area_keyword_message())
+                return
+            else:
+                reply(event, ask_shop_search_method_message())
+                return
+
+        if step == "waiting_area_query":
+            data["area_query"] = text
+            data.pop("location", None)
+            state_store.set(user_id, "shop", "waiting_genre", data)
+            reply(event, ask_shop_genre_message())
+            return
+
         if step == "waiting_genre":
             data["genre"] = text
             state_store.set(user_id, "shop", "waiting_budget", data)
@@ -518,70 +619,8 @@ def handle_text_message(event):
 
         if step == "waiting_budget":
             data["budget"] = text
-            location = data.get("location")
-            if not location:
-                state_store.set(user_id, "shop", "waiting_location", data)
-                reply(event, ask_location_message())
-                return
-
-            try:
-                places = places_service.search_nearby_shops(
-                    latitude=location["lat"],
-                    longitude=location["lng"],
-                    genre=data.get("genre", "和食"),
-                    budget=data.get("budget", "こだわらない"),
-                    radius_meters=Config.SHOP_RADIUS_METERS,
-                    max_results=Config.SHOP_MAX_RESULTS,
-                )
-            except Exception as e:
-                app.logger.exception("Shop search failed: %s", e)
-                reply(
-                    event,
-                    TextMessage(
-                        text=(
-                            "周辺店舗の検索でエラーが発生しました。\n"
-                            "Google Places API とフォールバック検索の両方で取得できませんでした。"
-                        )
-                    ),
-                )
-                return
-
-            if not places:
-                state_store.clear(user_id)
-                reply(event, [shop_summary_text([]), main_menu_message()])
-                return
-
-            state_store.clear(user_id)
-            messages = []
-
-            if places[0].get("source") == "osm_fallback":
-                messages.append(
-                    TextMessage(
-                        text=(
-                            "Google Maps API から候補を取得できなかったため、"
-                            "位置情報ベースの代替検索で周辺候補を表示しています。"
-                            "評価や価格帯は十分に取得できない場合があります。"
-                        )
-                    )
-                )
-
-            messages.extend(
-                [
-                    shop_summary_text(places),
-                    shop_results_flex_message(
-                        places=places,
-                        origin_lat=location["lat"],
-                        origin_lng=location["lng"],
-                        build_directions_url=places_service.build_directions_url,
-                    ),
-                ]
-            )
-
-            top = places[0]
-            if top.get("lat") is not None and top.get("lng") is not None:
-                messages.append(top_location_message(top))
-
-            reply(event, messages)
+            state_store.set(user_id, "shop", "searching", data)
+            handle_shop_search_and_reply(event, user_id, data)
             return
 
     if mode == "calc":
