@@ -12,7 +12,6 @@ GENRE_TO_PLACE_TYPES = {
     "寿司": ["sushi_restaurant"],
 }
 
-# OSM / Overpass 用のざっくりした対応
 GENRE_TO_OSM_FILTERS = {
     "ラーメン": {
         "amenities": ["restaurant", "fast_food"],
@@ -41,6 +40,7 @@ GENRE_TO_OSM_FILTERS = {
 }
 
 OVERPASS_URL = "https://overpass-api.de/api/interpreter"
+NOMINATIM_SEARCH_URL = "https://nominatim.openstreetmap.org/search"
 
 
 class PlacesService:
@@ -49,7 +49,7 @@ class PlacesService:
         self.session = requests.Session()
         self.session.headers.update(
             {
-                "User-Agent": "dr_gpt/1.0 (restaurant-search fallback; contact via app operator)"
+                "User-Agent": "dr_gpt/1.0 (restaurant-search fallback; area-search enabled)"
             }
         )
 
@@ -62,10 +62,6 @@ class PlacesService:
         radius_meters: int = 1200,
         max_results: int = 5,
     ) -> list[dict]:
-        """
-        1) Google Places API を優先
-        2) 失敗または 0件なら OSM Overpass API にフォールバック
-        """
         google_error = None
 
         if self.api_key:
@@ -95,10 +91,60 @@ class PlacesService:
 
         if google_error:
             raise RuntimeError(
-                f"Google Places API でも OSM フォールバックでも候補を取得できませんでした: {google_error}"
+                f"Google Places API と代替検索の両方で候補を取得できませんでした。Google側エラー: {google_error}"
             )
 
         raise RuntimeError("候補店舗を取得できませんでした。")
+
+    def search_nearby_shops_from_area(
+        self,
+        area_query: str,
+        genre: str,
+        budget: str,
+        radius_meters: int = 1200,
+        max_results: int = 5,
+    ) -> tuple[list[dict], dict]:
+        center = self._geocode_area_osm(area_query)
+        places = self.search_nearby_shops(
+            latitude=center["lat"],
+            longitude=center["lng"],
+            genre=genre,
+            budget=budget,
+            radius_meters=radius_meters,
+            max_results=max_results,
+        )
+        return places, center
+
+    def _geocode_area_osm(self, area_query: str) -> dict:
+        area_query = (area_query or "").strip()
+        if not area_query:
+            raise RuntimeError("エリア名が空です。")
+
+        params = {
+            "q": area_query,
+            "format": "jsonv2",
+            "limit": 1,
+            "addressdetails": 1,
+            "countrycodes": "jp",
+        }
+        response = self.session.get(
+            NOMINATIM_SEARCH_URL,
+            params=params,
+            timeout=20,
+        )
+        response.raise_for_status()
+        data = response.json()
+
+        if not data:
+            raise RuntimeError("指定されたエリアを座標に変換できませんでした。")
+
+        top = data[0]
+        return {
+            "lat": float(top["lat"]),
+            "lng": float(top["lon"]),
+            "display_name": top.get("display_name", area_query),
+            "query": area_query,
+        }
 
     def _search_nearby_shops_google(
         self,
@@ -244,7 +290,6 @@ out center tags;
             if cuisine_regex:
                 cuisine_parts = {c.strip() for c in cuisine.replace(";", ",").split(",") if c.strip()}
                 if cuisine_parts and not any(c in cuisine_parts for c in filters["cuisines"]):
-                    # cuisineが明記されていて、かつ目的ジャンルとズレる場合だけ除外
                     pass
 
             lat = element.get("lat")
@@ -265,7 +310,6 @@ out center tags;
             seen.add(key)
 
             distance_m = self._distance_m(latitude, longitude, lat, lng)
-
             google_maps_uri = self.build_search_url(name=name, address=address)
 
             places.append(
