@@ -1,14 +1,28 @@
 import logging
+import re
 
 from flask import Flask, abort, request
 from linebot.v3 import WebhookHandler
 from linebot.v3.exceptions import InvalidSignatureError
-from linebot.v3.messaging import ApiClient, Configuration, MessagingApi, ReplyMessageRequest, TextMessage
-from linebot.v3.webhooks import FollowEvent, LocationMessageContent, MessageEvent, PostbackEvent, TextMessageContent
+from linebot.v3.messaging import (
+    ApiClient,
+    Configuration,
+    MessagingApi,
+    ReplyMessageRequest,
+    TextMessage,
+)
+from linebot.v3.webhooks import (
+    FollowEvent,
+    LocationMessageContent,
+    MessageEvent,
+    PostbackEvent,
+    TextMessageContent,
+)
 
 from config import Config
 from line_ui import (
     article_action_message,
+    article_post_confirm_message,
     ask_budget_message,
     ask_calc_domain_message,
     ask_location_message,
@@ -62,6 +76,65 @@ def normalize_mode_text(text: str) -> str:
     return text.strip()
 
 
+def extract_title_from_markdown(article_md: str, fallback: str = "技術記事") -> str:
+    """
+    Markdownの先頭見出しからタイトルを推定する。
+    例:
+      # タイトル
+      ## タイトル
+    を優先して採用する。
+    """
+    if not article_md:
+        return fallback
+
+    for line in article_md.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+
+        m = re.match(r"^#{1,6}\s+(.+)$", stripped)
+        if m:
+            title = m.group(1).strip()
+            if title:
+                return title[:100]
+
+        # 見出しが出る前の通常文をタイトル候補にはしない
+        # ただし「タイトル: xxxx」形式だけは拾う
+        m2 = re.match(r"^(タイトル|title)\s*[:：]\s*(.+)$", stripped, re.IGNORECASE)
+        if m2:
+            title = m2.group(2).strip()
+            if title:
+                return title[:100]
+
+    return fallback[:100]
+
+
+def build_qiita_tags(domain: str) -> list[str]:
+    tags = ["ChatGPT"]
+
+    normalized = (domain or "").strip()
+    if normalized:
+        tags.append(normalized)
+
+    # よくありそうなタグの補助
+    if normalized == "数学":
+        tags.append("数学")
+    elif normalized == "統計学":
+        tags.append("統計")
+    elif normalized == "バイオインフォマティクス":
+        tags.append("Bioinformatics")
+
+    # 重複排除
+    seen = set()
+    unique_tags = []
+    for tag in tags:
+        if tag and tag not in seen:
+            unique_tags.append(tag)
+            seen.add(tag)
+
+    return unique_tags[:5]
+
+
 def start_shop_flow(user_id: str, event) -> None:
     state_store.set(user_id, "shop", "waiting_location", {})
     reply(event, ask_location_message())
@@ -74,26 +147,143 @@ def start_calc_flow(user_id: str, event) -> None:
 
 def start_chat_flow(user_id: str, event) -> None:
     state_store.set(user_id, "chat", "waiting_message", {})
-    reply(event, TextMessage(text="雑談モードです。自由に話しかけてください。メニューに戻る場合は「メニュー」と送ってください。"))
+    reply(
+        event,
+        TextMessage(
+            text="雑談モードです。自由に話しかけてください。メニューに戻る場合は「メニュー」と送ってください。"
+        ),
+    )
 
 
 def start_article_flow(user_id: str, event) -> None:
     state = state_store.get(user_id)
     data = state.get("data", {})
+
     if not data.get("last_question") or not data.get("last_answer") or not data.get("last_domain"):
-        reply(event, TextMessage(text="記事化する元データがありません。先に数理計算モードで質問してください。"))
+        reply(
+            event,
+            TextMessage(text="記事化する元データがありません。先に数理計算モードで質問してください。"),
+        )
         return
+
     article_md = openai_service.draft_article(
         domain=data["last_domain"],
         question=data["last_question"],
         answer=data["last_answer"],
     )
-    data["last_article"] = article_md
-    state_store.set(user_id, state.get("mode"), state.get("step"), data)
 
-    messages = text_chunks_as_messages(article_md)
+    fallback_title = f"{data['last_domain']}に関する解説"
+    article_title = extract_title_from_markdown(article_md, fallback=fallback_title)
+
+    data["last_article"] = article_md
+    data["last_article_title"] = article_title
+    data["article_ready_for_qiita"] = True
+    data["last_qiita_post_url"] = None
+    data["last_qiita_post_id"] = None
+
+    # 記事化後は記事投稿確認ステップへ
+    state_store.set(user_id, "article", "waiting_qiita_confirm", data)
+
+    messages = text_chunks_as_messages(article_md, chunk_size=1400)
+
     if qiita_service.is_enabled():
-        messages.append(TextMessage(text="Qiita連携用トークンが設定されています。必要ならこのMarkdownを元に別処理で投稿できます。"))
+        messages.append(article_post_confirm_message(article_title))
+    else:
+        messages.append(
+            TextMessage(
+                text=(
+                    "記事を作成しました。\n"
+                    "ただし Qiita 投稿用トークンが未設定のため、自動投稿はできません。\n"
+                    "必要であれば QIITA_ACCESS_TOKEN を設定してください。"
+                )
+            )
+        )
+
+    reply(event, messages[:5])
+
+
+def post_article_to_qiita(user_id: str, event) -> None:
+    state = state_store.get(user_id)
+    data = state.get("data", {})
+
+    article_md = data.get("last_article")
+    article_title = data.get("last_article_title")
+    last_domain = data.get("last_domain")
+
+    if not article_md or not article_title:
+        reply(
+            event,
+            [
+                TextMessage(text="投稿対象の記事データが見つかりません。先に「記事化」を実行してください。"),
+                main_menu_message(),
+            ],
+        )
+        return
+
+    if not qiita_service.is_enabled():
+        reply(
+            event,
+            TextMessage(text="QIITA_ACCESS_TOKEN が未設定のため、Qiitaへ投稿できません。"),
+        )
+        return
+
+    if data.get("last_qiita_post_url"):
+        reply(
+            event,
+            [
+                TextMessage(
+                    text=(
+                        "この記事はすでにQiitaへ投稿済みです。\n"
+                        f"{data['last_qiita_post_url']}"
+                    )
+                ),
+                main_menu_message(),
+            ],
+        )
+        return
+
+    tags = build_qiita_tags(last_domain)
+
+    try:
+        result = qiita_service.create_item(
+            title=article_title,
+            body_markdown=article_md,
+            tags=tags,
+            private=False,
+        )
+    except Exception as e:
+        app.logger.exception("Qiita post failed: %s", e)
+        reply(
+            event,
+            TextMessage(
+                text=(
+                    "Qiita投稿でエラーが発生しました。\n"
+                    "トークン権限、タグ、本文サイズ、Qiita側ステータスをご確認ください。"
+                )
+            ),
+        )
+        return
+
+    data["last_qiita_post_url"] = result.get("url")
+    data["last_qiita_post_id"] = result.get("id")
+    data["article_ready_for_qiita"] = False
+
+    # 投稿後は計算モードに戻しておく
+    state_store.set(user_id, "calc", "waiting_question", data)
+
+    messages = [
+        TextMessage(
+            text=(
+                "Qiitaへ投稿しました。\n"
+                f"タイトル: {article_title}"
+            )
+        )
+    ]
+
+    if result.get("url"):
+        messages.append(TextMessage(text=result["url"]))
+
+    messages.append(main_menu_message())
     reply(event, messages[:5])
 
 
@@ -141,6 +331,7 @@ def handle_postback(event):
     if text:
         class DummyMessage:
             pass
+
         event.message = DummyMessage()
         event.message.text = text
         handle_text_message(event)
@@ -163,7 +354,10 @@ def handle_location_message(event):
         reply(event, ask_shop_genre_message())
         return
 
-    reply(event, TextMessage(text="位置情報を受け取りました。店探しを始める場合は「おすすめの店」を選んでください。"))
+    reply(
+        event,
+        TextMessage(text="位置情報を受け取りました。店探しを始める場合は「おすすめの店」を選んでください。"),
+    )
 
 
 @handler.add(MessageEvent, message=TextMessageContent)
@@ -197,12 +391,12 @@ def handle_text_message(event):
         start_chat_flow(user_id, event)
         return
 
-    if text == "記事化":
+    if text in {"記事化", "記事化する"}:
         start_article_flow(user_id, event)
         return
 
-    if text == "記事化する":
-        start_article_flow(user_id, event)
+    if text == "Qiitaに投稿する":
+        post_article_to_qiita(user_id, event)
         return
 
     if mode == "shop":
@@ -231,7 +425,10 @@ def handle_text_message(event):
                 )
             except Exception as e:
                 app.logger.exception("Shop search failed: %s", e)
-                reply(event, TextMessage(text="店舗検索でエラーが発生しました。Google Maps API設定をご確認ください。"))
+                reply(
+                    event,
+                    TextMessage(text="店舗検索でエラーが発生しました。Google Maps API設定をご確認ください。"),
+                )
                 return
 
             if not places:
@@ -253,6 +450,7 @@ def handle_text_message(event):
             top = places[0]
             if top.get("lat") is not None and top.get("lng") is not None:
                 messages.append(top_location_message(top))
+
             reply(event, messages[:5])
             return
 
@@ -273,8 +471,16 @@ def handle_text_message(event):
             messages = text_chunks_as_messages(answer)
             if len(messages) <= 4:
                 messages.append(article_action_message())
+
             reply(event, messages[:5])
             return
+
+    if mode == "article" and step == "waiting_qiita_confirm":
+        reply(
+            event,
+            article_post_confirm_message(data.get("last_article_title", "技術記事")),
+        )
+        return
 
     if mode == "chat":
         answer = openai_service.chat(text)
