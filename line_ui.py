@@ -19,12 +19,14 @@ LINE_TEXT_SAFE_LIMIT = 4500
 def main_menu_message() -> TextMessage:
     return TextMessage(
         text=(
-            "メニューです。\n"
-            "・雑談\n"
-            "・おすすめの店\n"
-            "・数理計算\n"
-            "・記事化\n"
-            "必要なものを選んでください。"
+            "よう来てくれたのう！🔬✨\n"
+            "わしは DrGPT じゃよ 👨‍🔬\n\n"
+            "📚 メニューはこちらじゃ！\n"
+            "・雑談 💬\n"
+            "・おすすめの店 🍜\n"
+            "・数理計算 📐\n"
+            "・記事化 ✍️\n\n"
+            "やりたいことを選ぶのじゃ〜！🚀"
         ),
         quick_reply=QuickReply(
             items=[
@@ -41,9 +43,10 @@ def main_menu_message() -> TextMessage:
 def ask_shop_search_method_message() -> TextMessage:
     return TextMessage(
         text=(
-            "お店検索の方法を選んでください。\n"
-            "・位置情報を送る\n"
-            "・駅名やエリア名で探す"
+            "ふむ、お店探しじゃな 🍽️\n"
+            "探し方を選ぶのじゃよ！\n\n"
+            "📍 位置情報を送る\n"
+            "🗺️ 駅名やエリア名で探す"
         ),
         quick_reply=QuickReply(
             items=[
@@ -58,8 +61,8 @@ def ask_shop_search_method_message() -> TextMessage:
 def ask_area_keyword_message() -> TextMessage:
     return TextMessage(
         text=(
-            "駅名・エリア名・住所を送ってください。\n"
-            "例:\n"
+            "駅名・エリア名・住所を送ってほしいのじゃ 🗺️✨\n"
+            "たとえば、こんな感じじゃよ。\n\n"
             "・柏駅\n"
             "・新宿\n"
             "・東京都千代田区丸の内"
@@ -74,7 +77,7 @@ def ask_area_keyword_message() -> TextMessage:
 
 def ask_shop_genre_message() -> TextMessage:
     return TextMessage(
-        text="ジャンルを選んでください。",
+        text="どんなジャンルのお店を探すのじゃ？ 🍜☕🍣",
         quick_reply=QuickReply(
             items=[
                 QuickReplyItem(action=MessageAction(label="ラーメン", text="ラーメン")),
@@ -91,7 +94,7 @@ def ask_shop_genre_message() -> TextMessage:
 
 def ask_budget_message() -> TextMessage:
     return TextMessage(
-        text="予算帯を選んでください。",
+        text="予算帯はどのくらいを考えておるかのう？ 💴",
         quick_reply=QuickReply(
             items=[
                 QuickReplyItem(action=MessageAction(label="〜1000円", text="〜1000円")),
@@ -106,7 +109,10 @@ def ask_budget_message() -> TextMessage:
 
 def ask_calc_domain_message() -> TextMessage:
     return TextMessage(
-        text="どの分野で回答しますか？",
+        text=(
+            "よし、数理や知識の相談じゃな 📚✨\n"
+            "どの分野で答えるのがよいか、選ぶのじゃよ。"
+        ),
         quick_reply=QuickReply(
             items=[
                 QuickReplyItem(action=MessageAction(label="数学", text="数学")),
@@ -121,7 +127,10 @@ def ask_calc_domain_message() -> TextMessage:
 
 def article_action_message() -> TextMessage:
     return TextMessage(
-        text="直前の回答をもとに記事化できます。実行しますか？",
+        text=(
+            "直前の回答をもとに記事へまとめられるのじゃ ✍️✨\n"
+            "このまま記事化してみるかのう？"
+        ),
         quick_reply=QuickReply(
             items=[
                 QuickReplyItem(action=MessageAction(label="記事化する", text="記事化する")),
@@ -135,9 +144,9 @@ def article_post_confirm_message(title: str) -> TextMessage:
     safe_title = (title or "無題").strip()[:80]
     return TextMessage(
         text=(
-            "記事を作成しました。\n"
+            "記事ができあがったのじゃ！📝✨\n"
             f"タイトル案: {safe_title}\n\n"
-            "Qiitaへ投稿しますか？"
+            "Qiitaへ投稿してみるかのう？"
         ),
         quick_reply=QuickReply(
             items=[
@@ -269,11 +278,11 @@ def shop_results_flex_message(
 
 def shop_summary_text(places: Sequence[dict], area_label: str | None = None) -> TextMessage:
     if not places:
-        return TextMessage(text="候補が見つかりませんでした。条件を変えて再度お試しください。")
+        return TextMessage(text="候補が見つからなかったのじゃ…条件を変えてもう一度試してほしいのう。")
 
-    title = "候補を見つけました。上位候補はこちらです。"
+    title = "候補が見つかったのじゃ！上位候補はこちらじゃよ 🍽️"
     if area_label:
-        title = f"{area_label} 周辺の候補を見つけました。上位候補はこちらです。"
+        title = f"{area_label} 周辺で候補が見つかったのじゃ！上位候補はこちらじゃよ 🍽️"
 
     lines = [title]
     for idx, p in enumerate(places[:5], start=1):
