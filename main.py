@@ -1,37 +1,44 @@
 # =============================================================
-# LINE Bot + OpenAI (latest Responses API)
+# LINE Bot + OpenAI + Flask (Render production-ready, LINE SDK v3)
 # main.py
 # =============================================================
 
-import os
 import logging
+import os
 
-from flask import Flask, request, abort
+from dotenv import load_dotenv
+from flask import Flask, abort, request
 from openai import OpenAI
 
-from linebot import LineBotApi, WebhookHandler
-from linebot.exceptions import InvalidSignatureError
-from linebot.models import MessageEvent, TextMessage, TextSendMessage
+from linebot.v3 import WebhookHandler
+from linebot.v3.exceptions import InvalidSignatureError
+from linebot.v3.messaging import (
+    ApiClient,
+    Configuration,
+    MessagingApi,
+    ReplyMessageRequest,
+    TextMessage,
+)
+from linebot.v3.webhooks import MessageEvent, TextMessageContent
 
-# =============================================================
+# -------------------------------------------------------------
+# .env 読み込み（ローカル開発用）
+# Render本番ではダッシュボードの Environment Variables が使われる
+# -------------------------------------------------------------
+load_dotenv()
+
+# -------------------------------------------------------------
 # 環境変数
-# =============================================================
-# 事前に以下を設定してください
-# export OPENAI_API_KEY="..."
-# export LINE_CHANNEL_ACCESS_TOKEN="..."
-# export LINE_CHANNEL_SECRET="..."
-# 任意:
-# export OPENAI_MODEL="gpt-5.4"
-
+# -------------------------------------------------------------
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5.4")
 
 LINE_CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
 LINE_CHANNEL_SECRET = os.getenv("LINE_CHANNEL_SECRET")
 
-# =============================================================
+# -------------------------------------------------------------
 # 必須設定チェック
-# =============================================================
+# -------------------------------------------------------------
 missing_envs = []
 if not OPENAI_API_KEY:
     missing_envs.append("OPENAI_API_KEY")
@@ -45,23 +52,24 @@ if missing_envs:
         "必要な環境変数が未設定です: " + ", ".join(missing_envs)
     )
 
-# =============================================================
-# 初期化
-# =============================================================
+# -------------------------------------------------------------
+# Flask / OpenAI / LINE 初期化
+# -------------------------------------------------------------
 app = Flask(__name__)
 app.logger.setLevel(logging.INFO)
 
 openai_client = OpenAI(api_key=OPENAI_API_KEY)
-line_bot_api = LineBotApi(LINE_CHANNEL_ACCESS_TOKEN)
+
+line_config = Configuration(access_token=LINE_CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(LINE_CHANNEL_SECRET)
 
-# =============================================================
-# OpenAIへ問い合わせる関数
-# =============================================================
+# -------------------------------------------------------------
+# OpenAI 応答生成
+# -------------------------------------------------------------
 def ask_gpt(user_message: str) -> str:
     """
-    LINEで受信したテキストを最新のOpenAI Responses APIへ送信し、
-    返答テキストを返す。
+    ユーザーのテキストを OpenAI Responses API に送り、
+    返信テキストを返す。
     """
     try:
         response = openai_client.responses.create(
@@ -70,7 +78,7 @@ def ask_gpt(user_message: str) -> str:
             instructions=(
                 "あなたはLINE上で丁寧かつ簡潔に回答するアシスタントです。"
                 "日本語で自然に回答してください。"
-                "必要以上に長くせず、相手に伝わりやすい表現にしてください。"
+                "必要以上に長くなりすぎず、相手に伝わりやすく答えてください。"
             ),
             input=user_message,
             max_output_tokens=1024,
@@ -81,7 +89,8 @@ def ask_gpt(user_message: str) -> str:
         if not reply_text:
             return "申し訳ありません。うまく応答を生成できませんでした。"
 
-        return reply_text
+        # LINEの返信文字数が過度に長くなりすぎるのを軽減
+        return reply_text[:4900]
 
     except Exception as e:
         app.logger.exception("OpenAI API error: %s", e)
@@ -90,19 +99,23 @@ def ask_gpt(user_message: str) -> str:
             "少し時間をおいて再度お試しください。"
         )
 
-# =============================================================
+# -------------------------------------------------------------
+# Health check
+# -------------------------------------------------------------
+@app.route("/", methods=["GET"])
+def healthcheck():
+    return "OK", 200
+
+# -------------------------------------------------------------
 # LINE Webhook
-# =============================================================
+# -------------------------------------------------------------
 @app.route("/callback", methods=["POST"])
 def callback():
-    # X-Line-Signature を取得
     signature = request.headers.get("X-Line-Signature", "")
-
-    # リクエストボディ取得
     body = request.get_data(as_text=True)
-    app.logger.info("Request body: %s", body)
 
-    # LINE署名検証 + イベント処理
+    app.logger.info("Webhook body: %s", body)
+
     try:
         handler.handle(body, signature)
     except InvalidSignatureError:
@@ -114,11 +127,11 @@ def callback():
 
     return "OK"
 
-# =============================================================
-# テキストメッセージ受信時
-# =============================================================
-@handler.add(MessageEvent, message=TextMessage)
-def handle_message(event):
+# -------------------------------------------------------------
+# テキストメッセージ受信
+# -------------------------------------------------------------
+@handler.add(MessageEvent, message=TextMessageContent)
+def handle_text_message(event):
     user_message = (event.message.text or "").strip()
 
     if not user_message:
@@ -126,14 +139,22 @@ def handle_message(event):
     else:
         reply_text = ask_gpt(user_message)
 
-    line_bot_api.reply_message(
-        event.reply_token,
-        TextSendMessage(text=reply_text)
-    )
+    try:
+        with ApiClient(line_config) as api_client:
+            line_bot_api = MessagingApi(api_client)
+            line_bot_api.reply_message(
+                ReplyMessageRequest(
+                    reply_token=event.reply_token,
+                    messages=[TextMessage(text=reply_text)],
+                )
+            )
+    except Exception as e:
+        app.logger.exception("LINE reply error: %s", e)
 
-# =============================================================
-# 起動
-# =============================================================
+# -------------------------------------------------------------
+# ローカル起動用
+# Render本番では gunicorn main:app を使う
+# -------------------------------------------------------------
 if __name__ == "__main__":
     port = int(os.getenv("PORT", "5000"))
-    app.run(host="0.0.0.0", port=port)
+    app.run(host="0.0.0.0", port=port, debug=False)
