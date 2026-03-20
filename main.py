@@ -51,6 +51,9 @@ openai_service = OpenAIService(Config.OPENAI_API_KEY, Config.OPENAI_MODEL)
 places_service = PlacesService(Config.GOOGLE_MAPS_API_KEY)
 qiita_service = QiitaService(Config.QIITA_ACCESS_TOKEN)
 
+CHAT_HISTORY_LIMIT_INPUT = 10
+CHAT_HISTORY_LIMIT_STORE = 20
+
 
 def get_user_id(event) -> str:
     if hasattr(event, "source") and getattr(event.source, "user_id", None):
@@ -77,13 +80,6 @@ def normalize_mode_text(text: str) -> str:
 
 
 def extract_title_from_markdown(article_md: str, fallback: str = "技術記事") -> str:
-    """
-    Markdownの先頭見出しからタイトルを推定する。
-    例:
-      # タイトル
-      ## タイトル
-    を優先して採用する。
-    """
     if not article_md:
         return fallback
 
@@ -98,8 +94,6 @@ def extract_title_from_markdown(article_md: str, fallback: str = "技術記事")
             if title:
                 return title[:100]
 
-        # 見出しが出る前の通常文をタイトル候補にはしない
-        # ただし「タイトル: xxxx」形式だけは拾う
         m2 = re.match(r"^(タイトル|title)\s*[:：]\s*(.+)$", stripped, re.IGNORECASE)
         if m2:
             title = m2.group(2).strip()
@@ -116,7 +110,6 @@ def build_qiita_tags(domain: str) -> list[str]:
     if normalized:
         tags.append(normalized)
 
-    # よくありそうなタグの補助
     if normalized == "数学":
         tags.append("数学")
     elif normalized == "統計学":
@@ -124,7 +117,6 @@ def build_qiita_tags(domain: str) -> list[str]:
     elif normalized == "バイオインフォマティクス":
         tags.append("Bioinformatics")
 
-    # 重複排除
     seen = set()
     unique_tags = []
     for tag in tags:
@@ -150,7 +142,11 @@ def start_chat_flow(user_id: str, event) -> None:
     reply(
         event,
         TextMessage(
-            text="雑談モードです。自由に話しかけてください。メニューに戻る場合は「メニュー」と送ってください。"
+            text=(
+                "雑談モードです。自由に話しかけてください。\n"
+                "過去の会話文脈もある程度踏まえて返答します。\n"
+                "メニューに戻る場合は「メニュー」と送ってください。"
+            )
         ),
     )
 
@@ -181,7 +177,6 @@ def start_article_flow(user_id: str, event) -> None:
     data["last_qiita_post_url"] = None
     data["last_qiita_post_id"] = None
 
-    # 記事化後は記事投稿確認ステップへ
     state_store.set(user_id, "article", "waiting_qiita_confirm", data)
 
     messages = text_chunks_as_messages(article_md, chunk_size=1400)
@@ -268,7 +263,6 @@ def post_article_to_qiita(user_id: str, event) -> None:
     data["last_qiita_post_id"] = result.get("id")
     data["article_ready_for_qiita"] = False
 
-    # 投稿後は計算モードに戻しておく
     state_store.set(user_id, "calc", "waiting_question", data)
 
     messages = [
@@ -285,6 +279,21 @@ def post_article_to_qiita(user_id: str, event) -> None:
 
     messages.append(main_menu_message())
     reply(event, messages[:5])
+
+
+def chat_with_history(user_id: str, user_text: str) -> str:
+    history = state_store.get_chat_history(user_id, limit=CHAT_HISTORY_LIMIT_INPUT)
+
+    answer = openai_service.chat(
+        user_text=user_text,
+        history=history,
+    )
+
+    state_store.append_chat_message(user_id, "user", user_text)
+    state_store.append_chat_message(user_id, "assistant", answer)
+    state_store.trim_chat_history(user_id, keep_last=CHAT_HISTORY_LIMIT_STORE)
+
+    return answer
 
 
 @app.route("/", methods=["GET"])
@@ -377,6 +386,11 @@ def handle_text_message(event):
     if text == "キャンセル":
         state_store.clear(user_id)
         reply(event, [TextMessage(text="キャンセルしました。"), main_menu_message()])
+        return
+
+    if text in {"履歴削除", "会話履歴削除", "雑談履歴削除"}:
+        state_store.clear_chat_history(user_id)
+        reply(event, TextMessage(text="雑談の会話履歴を削除しました。"))
         return
 
     if text == "おすすめの店":
@@ -483,7 +497,7 @@ def handle_text_message(event):
         return
 
     if mode == "chat":
-        answer = openai_service.chat(text)
+        answer = chat_with_history(user_id, text)
         reply(event, text_chunks_as_messages(answer))
         return
 
