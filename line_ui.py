@@ -12,8 +12,6 @@ from linebot.v3.messaging import (
     TextMessage,
 )
 
-# LINEのテキストは最大5000文字だが、実際のカウントはUTF-16 code units基準。
-# 安全側に倒して少し余裕を持たせる。
 LINE_TEXT_HARD_LIMIT = 5000
 LINE_TEXT_SAFE_LIMIT = 4500
 
@@ -40,12 +38,34 @@ def main_menu_message() -> TextMessage:
     )
 
 
-def ask_location_message() -> TextMessage:
+def ask_shop_search_method_message() -> TextMessage:
     return TextMessage(
-        text="現在地を送ってください。",
+        text=(
+            "お店検索の方法を選んでください。\n"
+            "・位置情報を送る\n"
+            "・駅名やエリア名で探す"
+        ),
         quick_reply=QuickReply(
             items=[
                 QuickReplyItem(action=LocationAction(label="位置情報を送る")),
+                QuickReplyItem(action=MessageAction(label="エリア名で探す", text="エリア名で探す")),
+                QuickReplyItem(action=MessageAction(label="キャンセル", text="キャンセル")),
+            ]
+        ),
+    )
+
+
+def ask_area_keyword_message() -> TextMessage:
+    return TextMessage(
+        text=(
+            "駅名・エリア名・住所を送ってください。\n"
+            "例:\n"
+            "・柏駅\n"
+            "・新宿\n"
+            "・東京都千代田区丸の内"
+        ),
+        quick_reply=QuickReply(
+            items=[
                 QuickReplyItem(action=MessageAction(label="キャンセル", text="キャンセル")),
             ]
         ),
@@ -159,6 +179,48 @@ def shop_results_flex_message(
         if place.get("rating") is not None:
             rating_text = f"★ {place['rating']} ({place.get('reviews', 0)}件)"
 
+        distance_text = ""
+        if place.get("distance_m") is not None:
+            distance_text = f"距離: 約{int(place['distance_m'])}m"
+
+        body_contents = [
+            {
+                "type": "text",
+                "text": place["name"],
+                "weight": "bold",
+                "size": "lg",
+                "wrap": True,
+            },
+            {
+                "type": "text",
+                "text": rating_text,
+                "size": "sm",
+                "color": "#666666",
+                "wrap": True,
+            },
+        ]
+
+        if distance_text:
+            body_contents.append(
+                {
+                    "type": "text",
+                    "text": distance_text,
+                    "size": "sm",
+                    "color": "#666666",
+                    "wrap": True,
+                }
+            )
+
+        body_contents.append(
+            {
+                "type": "text",
+                "text": place["address"],
+                "size": "sm",
+                "wrap": True,
+                "color": "#666666",
+            }
+        )
+
         bubble = {
             "type": "bubble",
             "size": "mega",
@@ -166,29 +228,7 @@ def shop_results_flex_message(
                 "type": "box",
                 "layout": "vertical",
                 "spacing": "md",
-                "contents": [
-                    {
-                        "type": "text",
-                        "text": place["name"],
-                        "weight": "bold",
-                        "size": "lg",
-                        "wrap": True,
-                    },
-                    {
-                        "type": "text",
-                        "text": rating_text,
-                        "size": "sm",
-                        "color": "#666666",
-                        "wrap": True,
-                    },
-                    {
-                        "type": "text",
-                        "text": place["address"],
-                        "size": "sm",
-                        "wrap": True,
-                        "color": "#666666",
-                    },
-                ],
+                "contents": body_contents,
             },
             "footer": {
                 "type": "box",
@@ -227,17 +267,28 @@ def shop_results_flex_message(
     )
 
 
-def shop_summary_text(places: Sequence[dict]) -> TextMessage:
+def shop_summary_text(places: Sequence[dict], area_label: str | None = None) -> TextMessage:
     if not places:
         return TextMessage(text="候補が見つかりませんでした。条件を変えて再度お試しください。")
 
-    lines = ["候補を見つけました。上位候補はこちらです。"]
-    for idx, p in enumerate(places[:3], start=1):
+    title = "候補を見つけました。上位候補はこちらです。"
+    if area_label:
+        title = f"{area_label} 周辺の候補を見つけました。上位候補はこちらです。"
+
+    lines = [title]
+    for idx, p in enumerate(places[:5], start=1):
         rating = p.get("rating")
-        if rating is None:
-            lines.append(f"{idx}. {p['name']}")
+        distance = p.get("distance_m")
+        suffix = []
+        if rating is not None:
+            suffix.append(f"★{rating}")
+        if distance is not None:
+            suffix.append(f"約{int(distance)}m")
+
+        if suffix:
+            lines.append(f"{idx}. {p['name']} / " + " / ".join(suffix))
         else:
-            lines.append(f"{idx}. {p['name']} / ★{rating}")
+            lines.append(f"{idx}. {p['name']}")
 
     return TextMessage(text="\n".join(lines))
 
@@ -247,9 +298,6 @@ def _utf16_len(text: str) -> int:
 
 
 def _slice_by_utf16_limit(text: str, limit: int) -> tuple[str, str]:
-    """
-    UTF-16 code units基準で安全に text を先頭部分 / 残り に切る。
-    """
     if _utf16_len(text) <= limit:
         return text, ""
 
@@ -269,10 +317,6 @@ def _slice_by_utf16_limit(text: str, limit: int) -> tuple[str, str]:
 
 
 def text_chunks_as_messages(text: str, chunk_size: int = LINE_TEXT_SAFE_LIMIT) -> list[TextMessage]:
-    """
-    LINE制限を意識して、UTF-16基準で安全に分割する。
-    まず改行単位でまとめ、長すぎる1行はさらに文字単位で分割する。
-    """
     text = (text or "").strip()
     if not text:
         return [TextMessage(text="")]
@@ -282,7 +326,6 @@ def text_chunks_as_messages(text: str, chunk_size: int = LINE_TEXT_SAFE_LIMIT) -
 
     for line in text.splitlines(keepends=True):
         if _utf16_len(line) > chunk_size:
-            # まず現在バッファを確定
             if current:
                 chunks.append(current)
                 current = ""
@@ -305,7 +348,6 @@ def text_chunks_as_messages(text: str, chunk_size: int = LINE_TEXT_SAFE_LIMIT) -
 
     safe_messages: list[TextMessage] = []
     for chunk in chunks:
-        # 念のため最終安全化
         remaining = chunk
         while remaining:
             head, remaining = _slice_by_utf16_limit(remaining, LINE_TEXT_HARD_LIMIT)
